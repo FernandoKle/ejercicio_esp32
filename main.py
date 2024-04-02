@@ -6,6 +6,8 @@ from mqtt_local import config
 import uasyncio as asyncio
 import dht, machine
 import btree
+import json
+from machine import Timer
 
 # Base de datos key/value con un btree
 try:
@@ -19,7 +21,7 @@ db = btree.open(f)
 
 
 d = dht.DHT22(machine.Pin(13))
-rele = Pin(2, Pin.OUT)
+rele = Pin(36, Pin.OUT)
 led = Pin(2, Pin.OUT)
 
 topic_base = machine.unique_id()
@@ -27,14 +29,19 @@ topic_base = machine.unique_id()
 ##################### Variables #####################
 if nuevo_db:
     modo_auto = True
-    periodo = 1
+    periodo = 30000
     setpoint = 26
     rele_estado = False
+    db[b"modo"] = modo_auto 
+    db[b"periodo"] = periodo 
+    db[b"rele"] = rele_estado 
+    db[b"setpoint"] = setpoint 
 else:
     modo_auto = db[b"modo"]
     periodo = db[b"periodo"]
     rele_estado = db[b"rele"]
     setpoint = db[b"setpoint"]
+
 #####################################################
 
 def sub_cb(topic, msg, retained):
@@ -46,11 +53,49 @@ async def wifi_han(state):
 
 # If you connect with clean_session True, must re-subscribe (MQTT spec 3.1.2.4)
 async def conn_han(client):
-    await client.subscribe('temperatura/' + topic_base, 1)
-    await client.subscribe('humedad/' + topic_base, 1)
+    await client.subscribe('destello/' + topic_base, 1)
+    await client.subscribe('rele/' + topic_base, 1)
     await client.subscribe('setpoint/' + topic_base, 1)
     await client.subscribe('periodo/' + topic_base, 1)
     await client.subscribe('modo/' + topic_base, 1)
+    
+async def transmitir():
+    print('Enviando Datos')
+    await client.publish('iot/' + topic_base, datos, qos = 1)
+
+publicar = Timer(0)
+publicar.init(period=periodo, mode=Timer.PERIODIC, callback=transmitir)
+
+async def destello():
+    led.value(True)
+    await asyncio.sleep(300)
+    led.value(False)
+    await asyncio.sleep(300)
+    led.value(True)
+
+async def recepcion():
+    async for topic, msg, retained in client.queue:
+
+        if 'setpoint' in topic:
+            setpoint = int(msg)
+
+        if 'destello' in topic:
+            destello()
+
+        if 'periodo' in topic:
+            periodo = int(msg)
+
+        if 'rele' in topic and modo_auto == False:
+            if 'true' in msg.lower() or int(msg) == 1:
+                rele_estado = True
+            else:
+                rele_estado = False
+
+        if 'modo' in topic:
+            if 'auto' in msg.lower():
+                modo_auto = True
+            else:
+                modo_auto = False
 
 ########################## MAIN ###########################
 
@@ -72,20 +117,29 @@ async def main(client):
                     else:
                         rele_estado = False
 
-                #await client.publish('fernando/temperatura', '{}'.format(temperatura), qos = 1)
+                #await client.publish(topic_base, '{}'.format(temperatura), qos = 1)
+
             except OSError as e:
                 print("sin sensor temperatura")
             try:
                 humedad = d.humidity()
 
                 #await client.publish('fernando/humedad', '{}'.format(humedad), qos = 1)
+
             except OSError as e:
                 print("sin sensor humedad")
         except OSError as e:
             print("sin sensor")
-            
+        
+        datos = json.dumps({'temperatura': temperatura,
+                            'humedad': humedad,
+                            'periodo': periodo,
+                            'modo_automatico': modo_auto,
+                            'setpoint':setpoint})
+
         rele.value(rele_estado)
         db[b"rele"] = rele_estado
+        print(f'Rele = {rele_estado}')
 
         await asyncio.sleep(20)  # Broker is slow
 
