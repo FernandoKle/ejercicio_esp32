@@ -63,39 +63,57 @@ async def transmitir():
     print('Enviando Datos')
     await client.publish('iot/' + topic_base, datos, qos = 1)
 
+# Timer 0 en modo periodico
 publicar = Timer(0)
 publicar.init(period=periodo, mode=Timer.PERIODIC, callback=transmitir)
 
 async def destello():
+    print('ESP32 usa Destello !')
     led.value(True)
     await asyncio.sleep(300)
     led.value(False)
     await asyncio.sleep(300)
     led.value(True)
+    await asyncio.sleep(300)
+    led.value(False)
 
+# Recepcion de datos
 async def recepcion():
     async for topic, msg, retained in client.queue:
 
         if 'setpoint' in topic:
             setpoint = int(msg)
+            print('setpoint =', setpoint)
+            
+            db[b"setpoint"] = setpoint 
 
         if 'destello' in topic:
             destello()
 
         if 'periodo' in topic:
             periodo = int(msg)
+            print('periodo =', periodo)
+            publicar.init(period=periodo, mode=Timer.PERIODIC, callback=transmitir)
+            
+            db[b"periodo"] = periodo 
 
         if 'rele' in topic and modo_auto == False:
             if 'true' in msg.lower() or int(msg) == 1:
                 rele_estado = True
             else:
                 rele_estado = False
+            
+            db[b"rele"] = rele_estado 
 
         if 'modo' in topic:
             if 'auto' in msg.lower():
                 modo_auto = True
+                print('modo automatico !')
             else:
                 modo_auto = False
+                print('modo MANUAL')
+            
+            db[b"modo"] = modo_auto 
 
 ########################## MAIN ###########################
 
@@ -161,5 +179,10 @@ finally:
     client.close()
     asyncio.new_event_loop()
 
+# Guardar y terminar
+db[b"modo"] = modo_auto 
+db[b"periodo"] = periodo 
+db[b"rele"] = rele_estado 
+db[b"setpoint"] = setpoint 
 db.close()
 f.close()
