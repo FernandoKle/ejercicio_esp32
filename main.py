@@ -65,7 +65,6 @@ async def transmitir():
 
 # Timer 0 en modo periodico
 publicar = Timer(0)
-publicar.init(period=periodo, mode=Timer.PERIODIC, callback=transmitir)
 
 async def destello():
     print('ESP32 usa Destello !')
@@ -121,6 +120,8 @@ async def main(client):
     await client.connect()
     n = 0
     await asyncio.sleep(2)  # Give broker time
+    
+    publicar.init(period=periodo, mode=Timer.PERIODIC, callback=transmitir)
 
     while True:
         try:
