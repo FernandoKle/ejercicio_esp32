@@ -7,7 +7,9 @@ import uasyncio as asyncio
 import dht, machine
 import btree
 import json
-from machine import Timer
+import ubinascii
+from machine import Timer, Pin
+from settings import *
 
 # Base de datos key/value con un btree
 try:
@@ -21,26 +23,29 @@ db = btree.open(f)
 
 
 d = dht.DHT22(machine.Pin(13))
-rele = Pin(36, Pin.OUT)
+rele = Pin(4, Pin.OUT)
 led = Pin(2, Pin.OUT)
 
-topic_base = machine.unique_id()
+topic_base = ubinascii.hexlify(machine.unique_id()).decode('utf-8')
+
+# DEBUG
+nuevo_db = True
 
 ##################### Variables #####################
 if nuevo_db:
-    modo_auto = True
-    periodo = 30000
+    modo_auto = 1 #True
+    periodo = 3000
     setpoint = 26
-    rele_estado = False
-    db[b"modo"] = modo_auto 
-    db[b"periodo"] = periodo 
-    db[b"rele"] = rele_estado 
-    db[b"setpoint"] = setpoint 
+    rele_estado = 0 #False
+    db["modo"] = str(modo_auto) 
+    db["periodo"] = str(periodo) 
+    db["rele"] = str(rele_estado)
+    db["setpoint"] = str(setpoint) 
 else:
-    modo_auto = db[b"modo"]
-    periodo = db[b"periodo"]
-    rele_estado = db[b"rele"]
-    setpoint = db[b"setpoint"]
+    modo_auto = int(db["modo"])
+    periodo = int(db["periodo"])
+    rele_estado = int(db["rele"])
+    setpoint = int(db["setpoint"])
 
 #####################################################
 
@@ -59,9 +64,11 @@ async def conn_han(client):
     await client.subscribe('periodo/' + topic_base, 1)
     await client.subscribe('modo/' + topic_base, 1)
     
-async def transmitir():
+datos = ""
+
+async def transmitir(algo=None):
     print('Enviando Datos')
-    await client.publish('iot/' + topic_base, datos, qos = 1)
+    await client.publish('iot2024/' + topic_base, datos, qos = 1)
 
 # Timer 0 en modo periodico
 publicar = Timer(0)
@@ -75,53 +82,64 @@ async def destello():
     led.value(True)
     await asyncio.sleep(300)
     led.value(False)
+    print('Fue muy efectivo !')
 
 # Recepcion de datos
-async def recepcion():
-    async for topic, msg, retained in client.queue:
+#async def recepcion():
+def recepcion(topic, msg, retained):
+#async for topic, msg, retained in client.queue:
 
-        if 'setpoint' in topic:
-            setpoint = int(msg)
-            print('setpoint =', setpoint)
-            
-            db[b"setpoint"] = setpoint 
+    if 'setpoint' in topic:
+        setpoint = int(msg)
+        print('setpoint =', setpoint)
+        
+        db["setpoint"] = setpoint 
 
-        if 'destello' in topic:
-            destello()
+    if 'destello' in topic:
+        destello()
 
-        if 'periodo' in topic:
-            periodo = int(msg)
-            print('periodo =', periodo)
-            publicar.init(period=periodo, mode=Timer.PERIODIC, callback=transmitir)
-            
-            db[b"periodo"] = periodo 
+    if 'periodo' in topic:
+        periodo = int(msg)
+        print('periodo =', periodo)
+        publicar.init(period=periodo, mode=Timer.PERIODIC, callback=transmitir)
+        
+        db["periodo"] = periodo 
 
-        if 'rele' in topic and modo_auto == False:
-            if 'true' in msg.lower() or int(msg) == 1:
-                rele_estado = True
-            else:
-                rele_estado = False
-            
-            db[b"rele"] = rele_estado 
+    if 'rele' in topic and modo_auto == False:
+        if 'true' in msg.lower() or int(msg) == 1:
+            rele_estado = True
+        else:
+            rele_estado = False
+        
+        db["rele"] = rele_estado 
 
-        if 'modo' in topic:
-            if 'auto' in msg.lower():
-                modo_auto = True
-                print('modo automatico !')
-            else:
-                modo_auto = False
-                print('modo MANUAL')
-            
-            db[b"modo"] = modo_auto 
+    if 'modo' in topic:
+        if 'auto' in msg.lower():
+            modo_auto = True
+            print('modo automatico !')
+        else:
+            modo_auto = False
+            print('modo MANUAL')
+        
+        db["modo"] = modo_auto 
 
 ########################## MAIN ###########################
 
 async def main(client):
+    print("topico:", 'iot2024/' + topic_base + '/#')
+    
+    print('Intentando conectar al wi-fi:', SSID)
+    print('con la contrasena:', password)
+
     await client.connect()
+    #client.connect()
     n = 0
     await asyncio.sleep(2)  # Give broker time
     
-    publicar.init(period=periodo, mode=Timer.PERIODIC, callback=transmitir)
+    await client.publish('iot2024/' + topic_base, "Iniciando...", qos = 1)
+    #publicar.init(period=periodo, mode=Timer.PERIODIC, callback=transmitir)
+    publicar.init(period=periodo, mode=Timer.PERIODIC, 
+        callback=lambda t: await transmitir())
 
     while True:
         try:
@@ -132,9 +150,9 @@ async def main(client):
                 
                 if modo_auto:
                     if temperatura >= setpoint:
-                        rele_estado = True
+                        rele_estado = 1
                     else:
-                        rele_estado = False
+                        rele_estado = 0
 
                 #await client.publish(topic_base, '{}'.format(temperatura), qos = 1)
 
@@ -156,8 +174,13 @@ async def main(client):
                             'modo_automatico': modo_auto,
                             'setpoint':setpoint})
 
+        # Test
+        #await transmitir()
+        #print('Enviando Datos')
+        #await client.publish('iot2024/' + topic_base, datos, qos = 1)
+
         rele.value(rele_estado)
-        db[b"rele"] = rele_estado
+        db["rele"] = str(rele_estado)
         print(f'Rele = {rele_estado}')
 
         await asyncio.sleep(20)  # Broker is slow
@@ -165,10 +188,13 @@ async def main(client):
 #################### END MAIN ########################
 
 # Define configuration
-config['subs_cb'] = sub_cb
+#config['subs_cb'] = sub_cb
+config['subs_cb'] = recepcion
 config['connect_coro'] = conn_han
 config['wifi_coro'] = wifi_han
 config['ssl'] = True
+config['ssid'] = SSID
+config['wifi_pw'] = password
 
 # Set up client
 MQTTClient.DEBUG = True  # Optional
@@ -181,9 +207,9 @@ finally:
     asyncio.new_event_loop()
 
 # Guardar y terminar
-db[b"modo"] = modo_auto 
-db[b"periodo"] = periodo 
-db[b"rele"] = rele_estado 
-db[b"setpoint"] = setpoint 
+db["modo"] = str(modo_auto)
+db["periodo"] = str(periodo)
+db["rele"] = str(rele_estado)
+db["setpoint"] = str(setpoint)
 db.close()
 f.close()
