@@ -28,6 +28,8 @@ led = Pin(2, Pin.OUT)
 
 topic_base = ubinascii.hexlify(machine.unique_id()).decode('utf-8')
 
+global modo_auto, periodo, setpoint, rele_estado
+
 # DEBUG
 nuevo_db = True
 
@@ -66,10 +68,6 @@ async def conn_han(client):
     
 datos = ""
 
-async def transmitir(algo=None):
-    print('Enviando Datos')
-    await client.publish('iot2024/' + topic_base, datos, qos = 1)
-
 # Timer 0 en modo periodico
 publicar = Timer(0)
 
@@ -87,13 +85,18 @@ async def destello():
 # Recepcion de datos
 #async def recepcion():
 def recepcion(topic, msg, retained):
+    global modo_auto, periodo, setpoint, rele_estado
+
 #async for topic, msg, retained in client.queue:
+
+    msg = msg.decode()
+    topic = topic.decode()
 
     if 'setpoint' in topic:
         setpoint = int(msg)
         print('setpoint =', setpoint)
         
-        db["setpoint"] = setpoint 
+        db["setpoint"] = str(setpoint)
 
     if 'destello' in topic:
         destello()
@@ -101,31 +104,41 @@ def recepcion(topic, msg, retained):
     if 'periodo' in topic:
         periodo = int(msg)
         print('periodo =', periodo)
-        publicar.init(period=periodo, mode=Timer.PERIODIC, callback=transmitir)
+        publicar.init(period=periodo, mode=Timer.PERIODIC, 
+            callback=lambda t: interrupcion_periodica() )
         
-        db["periodo"] = periodo 
+        db["periodo"] = str(periodo) 
 
     if 'rele' in topic and modo_auto == False:
         if 'true' in msg.lower() or int(msg) == 1:
-            rele_estado = True
+            rele_estado = 1
         else:
-            rele_estado = False
+            rele_estado = 0
         
-        db["rele"] = rele_estado 
+        db["rele"] = str(rele_estado) 
 
     if 'modo' in topic:
         if 'auto' in msg.lower():
-            modo_auto = True
+            modo_auto = 1
             print('modo automatico !')
         else:
-            modo_auto = False
+            modo_auto = 0
             print('modo MANUAL')
         
-        db["modo"] = modo_auto 
+        db["modo"] = str(modo_auto) 
+
+flag_periodo = False
+global flag_periodo 
+
+def interrupcion_periodica():
+    global flag_periodo 
+    flag_periodo = True
 
 ########################## MAIN ###########################
 
 async def main(client):
+    global modo_auto, periodo, setpoint, rele_estado, flag_periodo
+
     print("topico:", 'iot2024/' + topic_base + '/#')
     
     print('Intentando conectar al wi-fi:', SSID)
@@ -137,9 +150,9 @@ async def main(client):
     await asyncio.sleep(2)  # Give broker time
     
     await client.publish('iot2024/' + topic_base, "Iniciando...", qos = 1)
-    #publicar.init(period=periodo, mode=Timer.PERIODIC, callback=transmitir)
+
     publicar.init(period=periodo, mode=Timer.PERIODIC, 
-        callback=lambda t: await transmitir())
+        callback=lambda t: interrupcion_periodica() )
 
     while True:
         try:
@@ -148,23 +161,20 @@ async def main(client):
             try:
                 temperatura = d.temperature()
                 
-                if modo_auto:
+                if modo_auto and flag_periodo:
                     if temperatura >= setpoint:
                         rele_estado = 1
                     else:
                         rele_estado = 0
 
-                #await client.publish(topic_base, '{}'.format(temperatura), qos = 1)
-
             except OSError as e:
                 print("sin sensor temperatura")
+
             try:
                 humedad = d.humidity()
-
-                #await client.publish('fernando/humedad', '{}'.format(humedad), qos = 1)
-
             except OSError as e:
                 print("sin sensor humedad")
+
         except OSError as e:
             print("sin sensor")
         
@@ -174,16 +184,15 @@ async def main(client):
                             'modo_automatico': modo_auto,
                             'setpoint':setpoint})
 
-        # Test
         #await transmitir()
-        #print('Enviando Datos')
-        #await client.publish('iot2024/' + topic_base, datos, qos = 1)
+        print('Enviando Datos')
+        await client.publish('iot2024/' + topic_base, datos, qos = 1)
 
         rele.value(rele_estado)
         db["rele"] = str(rele_estado)
         print(f'Rele = {rele_estado}')
 
-        await asyncio.sleep(20)  # Broker is slow
+        await asyncio.sleep(10)  # Broker is slow
 
 #################### END MAIN ########################
 
@@ -197,7 +206,7 @@ config['ssid'] = SSID
 config['wifi_pw'] = password
 
 # Set up client
-MQTTClient.DEBUG = True  # Optional
+MQTTClient.DEBUG = False  # Optional
 client = MQTTClient(config)
 
 try:
