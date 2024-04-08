@@ -127,8 +127,8 @@ def recepcion(topic, msg, retained):
         
         db["modo"] = str(modo_auto) 
 
-flag_periodo = False
 global flag_periodo 
+flag_periodo = False
 
 def interrupcion_periodica():
     global flag_periodo 
