@@ -22,7 +22,7 @@ except OSError:
 db = btree.open(f)
 
 
-d = dht.DHT22(machine.Pin(13))
+d = dht.DHT22(machine.Pin(13)) # 25 en el simulador !
 rele = Pin(4, Pin.OUT)
 led = Pin(2, Pin.OUT)
 
