@@ -51,9 +51,6 @@ else:
 
 #####################################################
 
-def sub_cb(topic, msg, retained):
-    print('Topic = {} -> Valor = {}'.format(topic.decode(), msg.decode()))
-
 async def wifi_han(state):
     print('Wifi is ', 'up' if state else 'down')
     await asyncio.sleep(1)
@@ -68,9 +65,6 @@ async def conn_han(client):
     
 datos = ""
 
-# Timer 0 en modo periodico
-publicar = Timer(0)
-
 async def destello():
     print('ESP32 usa Destello !')
     led.value(True)
@@ -82,12 +76,8 @@ async def destello():
     led.value(False)
     print('Fue muy efectivo !')
 
-# Recepcion de datos
-#async def recepcion():
 def recepcion(topic, msg, retained):
     global modo_auto, periodo, setpoint, rele_estado
-
-#async for topic, msg, retained in client.queue:
 
     msg = msg.decode()
     topic = topic.decode()
@@ -127,17 +117,65 @@ def recepcion(topic, msg, retained):
         
         db["modo"] = str(modo_auto) 
 
-global flag_periodo 
-flag_periodo = False
+async def muestreo_rele():
+    global periodo, modo_auto, temperatura, humedad, setpoint, rele_estado, rele
 
-def interrupcion_periodica():
-    global flag_periodo 
-    flag_periodo = True
+    while True:
+        if modo_auto:
+            if temperatura >= setpoint:
+                rele_estado = 1
+            else:
+                rele_estado = 0
+
+        rele.value(rele_estado)
+        db["rele"] = str(rele_estado)
+        print(f'Rele = {rele_estado}')
+
+        await asyncio.sleep(periodo)
+
+async def transmitir(client):
+    global modo_auto, periodo, setpoint, temperatura, humedad
+
+    while True:
+
+        datos = json.dumps({'temperatura': temperatura,
+                            'humedad': humedad,
+                            'periodo': periodo,
+                            'modo_automatico': modo_auto,
+                            'setpoint':setpoint})
+
+        print('Enviando Datos')
+        await client.publish('iot2024/' + topic_base, datos, qos = 1)
+
+        await asyncio.sleep(5)
+
+async def medir():
+    global modo_auto, periodo, setpoint, temperatura, humedad
+
+    while True:
+        try:
+            d.measure()
+            try:
+                temperatura = d.temperature()
+            except OSError as e:
+                print("sin sensor temperatura")
+            try:
+                humedad = d.humidity()
+            except OSError as e:
+                print("sin sensor humedad")
+        except OSError as e:
+            print("sin sensor")
+        
+        await asyncio.sleep(3)
+
+async def actualizar_db():
+    pass
+    #TODO: COMPLETAR ESTA FUNCION
 
 ########################## MAIN ###########################
 
 async def main(client):
-    global modo_auto, periodo, setpoint, rele_estado, flag_periodo
+    global modo_auto, periodo, setpoint, rele_estado, temperatura, humedad
 
     print("topico:", 'iot2024/' + topic_base + '/#')
     
@@ -151,53 +189,16 @@ async def main(client):
     
     await client.publish('iot2024/' + topic_base, "Iniciando...", qos = 1)
 
-    publicar.init(period=periodo, mode=Timer.PERIODIC, 
-        callback=lambda t: interrupcion_periodica() )
+    tasks = [None] * 4
 
-    while True:
-        try:
-            d.measure()
-
-            try:
-                temperatura = d.temperature()
-                
-                if modo_auto and flag_periodo:
-                    if temperatura >= setpoint:
-                        rele_estado = 1
-                    else:
-                        rele_estado = 0
-
-            except OSError as e:
-                print("sin sensor temperatura")
-
-            try:
-                humedad = d.humidity()
-            except OSError as e:
-                print("sin sensor humedad")
-
-        except OSError as e:
-            print("sin sensor")
-        
-        datos = json.dumps({'temperatura': temperatura,
-                            'humedad': humedad,
-                            'periodo': periodo,
-                            'modo_automatico': modo_auto,
-                            'setpoint':setpoint})
-
-        #await transmitir()
-        print('Enviando Datos')
-        await client.publish('iot2024/' + topic_base, datos, qos = 1)
-
-        rele.value(rele_estado)
-        db["rele"] = str(rele_estado)
-        print(f'Rele = {rele_estado}')
-
-        await asyncio.sleep(10)  # Broker is slow
+    tasks.append(asyncio.create_task( medir() ) ) 
+    tasks.append(asyncio.create_task( muestreo_rele() ) ) 
+    tasks.append(asyncio.create_task( transmitir(client) )) 
+    tasks.append(asyncio.create_task( actualizar_db() ) ) 
 
 #################### END MAIN ########################
 
 # Define configuration
-#config['subs_cb'] = sub_cb
 config['subs_cb'] = recepcion
 config['connect_coro'] = conn_han
 config['wifi_coro'] = wifi_han
