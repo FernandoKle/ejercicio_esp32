@@ -1,4 +1,4 @@
-SSID = "SalaTI"
+SSID = "SalaTI" #Wokwi-GUEST
 password = PASS = "edupublica"
 TOKEN = "algo"
 CHATID = "iot2024"

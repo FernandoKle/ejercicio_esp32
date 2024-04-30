@@ -28,29 +28,35 @@ led = Pin(2, Pin.OUT)
 
 topic_base = ubinascii.hexlify(machine.unique_id()).decode('utf-8')
 
-global modo_auto, periodo, setpoint, rele_estado
+class Datos():
+    modo_auto = 1 #True
+    periodo = 3
+    setpoint = 26
+    rele_estado = 0 #False
+    humedad = 0
+    temperatura = 0
+
+global datos
+datos = Datos()
 
 # DEBUG
 nuevo_db = True
 
 ##################### Variables #####################
 if nuevo_db:
-    modo_auto = 1 #True
-    periodo = 3
-    setpoint = 26
-    rele_estado = 0 #False
-    db["modo"] = str(modo_auto) 
-    db["periodo"] = str(periodo) 
-    db["rele"] = str(rele_estado)
-    db["setpoint"] = str(setpoint) 
+    datos.modo_auto = 1 #True
+    datos.periodo = 3
+    datos.setpoint = 26
+    datos.rele_estado = 0 #False
+    db["modo"] = str(datos.modo_auto) 
+    db["periodo"] = str(datos.periodo) 
+    db["rele"] = str(datos.rele_estado)
+    db["setpoint"] = str(datos.setpoint) 
 else:
-    modo_auto = int(db["modo"])
-    periodo = int(db["periodo"])
-    rele_estado = int(db["rele"])
-    setpoint = int(db["setpoint"])
-
-temperatura = 0
-humedad = 0
+    datos.modo_auto = int(db["modo"])
+    datos.periodo = int(db["periodo"])
+    datos.rele_estado = int(db["rele"])
+    datos.setpoint = int(db["setpoint"])
 
 db.close()
 f.close()
@@ -69,8 +75,6 @@ async def conn_han(client):
     await client.subscribe('periodo/' + topic_base, 1)
     await client.subscribe('modo/' + topic_base, 1)
     
-datos = ""
-
 ##############################################################
 
 async def destello():
@@ -87,89 +91,90 @@ async def destello():
 ##############################################################
 
 def recepcion(topic, msg, retained):
-    global modo_auto, periodo, setpoint, rele_estado
+    global datos
 
     msg = msg.decode()
     topic = topic.decode()
 
+    print("Msg:", msg)
+    print("Topic:", topic)
+
     if 'setpoint' in topic:
-        setpoint = int(msg)
-        print('setpoint =', setpoint)
+        datos.setpoint = int(msg)
+        print('setpoint =', datos.setpoint)
         
     if 'destello' in topic:
         await destello()
 
     if 'periodo' in topic:
-        periodo = int(msg)
-        print('periodo =', periodo)
-        publicar.init(period=periodo, mode=Timer.PERIODIC, 
-            callback=lambda t: interrupcion_periodica() )
+        datos.periodo = int(msg)
+        print('periodo =', datos.periodo)
         
-    if 'rele' in topic and modo_auto == False:
+    if 'rele' in topic and datos.modo_auto == False:
         if 'true' in msg.lower() or int(msg) == 1:
-            rele_estado = 1
+            datos.rele_estado = 1
         else:
-            rele_estado = 0
+            datos.rele_estado = 0
         
     if 'modo' in topic:
         if 'auto' in msg.lower():
-            modo_auto = 1
+            datos.modo_auto = 1
             print('modo automatico !')
         else:
-            modo_auto = 0
+            datos.modo_auto = 0
             print('modo MANUAL')
         
 ##############################################################
 
 async def muestreo_rele():
-    global periodo, modo_auto, temperatura, humedad, setpoint, rele_estado, rele
+    global datos
 
     while True:
         print("Muestreo del rele...")
-        if modo_auto:
-            if temperatura >= setpoint:
-                rele_estado = 1
+        if datos.modo_auto:
+            if datos.temperatura >= datos.setpoint:
+                datos.rele_estado = 1
             else:
-                rele_estado = 0
+                datos.rele_estado = 0
 
-        rele.value(rele_estado)
-        print(f'Rele = {rele_estado}')
+        rele.value(datos.rele_estado)
+        print(f'Rele = {datos.rele_estado}')
 
-        await asyncio.sleep(periodo)
+        await asyncio.sleep(datos.periodo)
 
 ##############################################################
 
 async def transmitir(client):
-    global modo_auto, periodo, setpoint, temperatura, humedad
+    global datos
 
     while True:
 
-        datos = json.dumps({'temperatura': temperatura,
-                            'humedad': humedad,
-                            'periodo': periodo,
-                            'modo_automatico': modo_auto,
-                            'setpoint':setpoint})
+        mensaje = json.dumps({'temperatura': datos.temperatura,
+                            'humedad': datos.humedad,
+                            'periodo': datos.periodo,
+                            'modo_automatico': datos.modo_auto,
+                            'setpoint':datos.setpoint})
 
         print('Enviando Datos')
-        await client.publish('iot2024/' + topic_base, datos, qos = 1)
+        await client.publish('iot2024/' + topic_base, mensaje, qos = 1)
 
         await asyncio.sleep(5)
 
 ##############################################################
 
 async def medir():
-    global modo_auto, periodo, setpoint, temperatura, humedad
+    global datos
 
     while True:
         print("Midiendo temperatura/humedad...")
         try:
             d.measure()
             try:
-                temperatura = d.temperature()
+                datos.temperatura = d.temperature()
             except OSError as e:
                 print("sin sensor temperatura")
             try:
-                humedad = d.humidity()
+                datos.humedad = d.humidity()
             except OSError as e:
                 print("sin sensor humedad")
         except OSError as e:
@@ -180,14 +185,16 @@ async def medir():
 ##############################################################
 
 async def actualizar_db():
+    global datos
+
     while True:
         print("Actualizando base de datos...")
-        f = open("mydb", "r+b")
+        f = open("mydb", "w+b")
         db = btree.open(f)
-        db["modo"] = str(modo_auto)
-        db["periodo"] = str(periodo)
-        db["rele"] = str(rele_estado)
-        db["setpoint"] = str(setpoint)
+        db["modo"] = str(datos.modo_auto)
+        db["periodo"] = str(datos.periodo)
+        db["rele"] = str(datos.rele_estado)
+        db["setpoint"] = str(datos.setpoint)
         db.close()
         f.close()
         await asyncio.sleep(10)
@@ -195,7 +202,6 @@ async def actualizar_db():
 ########################### MAIN #############################
 
 async def main(client):
-    global modo_auto, periodo, setpoint, rele_estado, temperatura, humedad
 
     print("topico:", 'iot2024/' + topic_base + '/#')
     
@@ -217,7 +223,7 @@ async def main(client):
     tasks.append( asyncio.create_task( actualizar_db()      )) 
 
     try:
-        res = await asyncio.gather(*tasks, return_exceptions=False)
+        res = await asyncio.gather(*tasks, return_exceptions=True)
     except asyncio.TimeoutError:    
         print('Timeout')            
     except asyncio.CancelledError:
@@ -245,11 +251,11 @@ finally:
     asyncio.new_event_loop()
 
 # Guardar y terminar
-f = open("mydb", "r+b")
+f = open("mydb", "w+b")
 db = btree.open(f)
-db["modo"] = str(modo_auto)
-db["periodo"] = str(periodo)
-db["rele"] = str(rele_estado)
-db["setpoint"] = str(setpoint)
+db["modo"] = str(datos.modo_auto)
+db["periodo"] = str(datos.periodo)
+db["rele"] = str(datos.rele_estado)
+db["setpoint"] = str(datos.setpoint)
 db.close()
 f.close()
