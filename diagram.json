@@ -6,8 +6,7 @@
       "type": "wokwi-esp32-devkit-v1",
       "id": "esp",
       "top": -40.67,
-      "left": -193.33,
-      "attrs": { "env": "micropython-20230426-v1.20.0" }
+      "left": -193.33
     },
     { "type": "wokwi-dht22", "id": "dht1", "top": -39.7, "left": 80.6, "attrs": {} },
     {

@@ -617,8 +617,7 @@ class MQTTClient(MQTT_base):
             else:  # Timeout: still in connecting state
                 s.disconnect()
                 await asyncio.sleep(1)
-        
-        #await asyncio.sleep(3)
+
         if not s.isconnected():  # Timed out
             raise OSError("Wi-Fi connect timed out")
         if not quick:  # Skip on first connection only if power saving

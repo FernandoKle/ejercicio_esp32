@@ -3,7 +3,7 @@
 
 from mqtt_as import MQTTClient
 from mqtt_local import config
-import uasyncio as asyncio
+import asyncio
 import dht, machine
 import btree
 import json
@@ -69,22 +69,25 @@ async def wifi_han(state):
 
 # If you connect with clean_session True, must re-subscribe (MQTT spec 3.1.2.4)
 async def conn_han(client):
-    await client.subscribe('destello/' + topic_base, 1)
-    await client.subscribe('rele/' + topic_base, 1)
-    await client.subscribe('setpoint/' + topic_base, 1)
-    await client.subscribe('periodo/' + topic_base, 1)
-    await client.subscribe('modo/' + topic_base, 1)
+    while True:
+        await client.up.wait()  # Wait on an Event
+        client.up.clear()
+        await client.subscribe(f"iot2024/{topic_base}/destello", 1)
+        await client.subscribe(f"iot2024/{topic_base}/rele", 1)
+        await client.subscribe(f"iot2024/{topic_base}/setpoint", 1)
+        await client.subscribe(f"iot2024/{topic_base}/periodo", 1)
+        await client.subscribe(f"iot2024/{topic_base}/modo", 1)
     
 ##############################################################
 
 async def destello():
     print('ESP32 usa Destello !')
     led.value(True)
-    await asyncio.sleep(300)
+    await asyncio.sleep(1)
     led.value(False)
-    await asyncio.sleep(300)
+    await asyncio.sleep(1)
     led.value(True)
-    await asyncio.sleep(300)
+    await asyncio.sleep(1)
     led.value(False)
     print('Fue muy efectivo !')
 
@@ -123,6 +126,42 @@ def recepcion(topic, msg, retained):
         else:
             datos.modo_auto = 0
             print('modo MANUAL')
+
+##############################################################
+
+async def recepcion_async(client):
+
+    async for topic, msg, retained in client.queue:
+        msg = msg.decode()
+        topic = topic.decode()
+    
+        print("Msg:", msg)
+        print("Topic:", topic)
+    
+        if 'setpoint' in topic:
+            datos.setpoint = int(msg)
+            print('setpoint =', datos.setpoint)
+            
+        if 'destello' in topic:
+            await destello()
+    
+        if 'periodo' in topic:
+            datos.periodo = int(msg)
+            print('periodo =', datos.periodo)
+            
+        if 'rele' in topic and datos.modo_auto == False:
+            if 'true' in msg.lower() or int(msg) == 1:
+                datos.rele_estado = 1
+            else:
+                datos.rele_estado = 0
+            
+        if 'modo' in topic:
+            if 'auto' in msg.lower():
+                datos.modo_auto = 1
+                print('modo automatico !')
+            else:
+                datos.modo_auto = 0
+                print('modo MANUAL')
         
 ##############################################################
 
@@ -202,6 +241,7 @@ async def actualizar_db():
 ########################### MAIN #############################
 
 async def main(client):
+    global datos
 
     print("topico:", 'iot2024/' + topic_base + '/#')
     
@@ -209,18 +249,57 @@ async def main(client):
     print('con la contrasena:', password)
 
     await client.connect()
-    #client.connect()
-    n = 0
+    
     await asyncio.sleep(2)  # Give broker time
     
     await client.publish('iot2024/' + topic_base, "Iniciando...", qos = 1)
 
     tasks = []
 
-    tasks.append( asyncio.create_task( medir()              ))
-    tasks.append( asyncio.create_task( muestreo_rele()      )) 
-    tasks.append( asyncio.create_task( transmitir(client)   )) 
-    tasks.append( asyncio.create_task( actualizar_db()      )) 
+    #tasks.append( asyncio.create_task( medir() ))
+    tasks.append( asyncio.create_task( muestreo_rele() )) 
+    tasks.append( asyncio.create_task( recepcion_async(client) ))
+    tasks.append( asyncio.create_task( conn_han(client) ))  
+    #tasks.append( asyncio.create_task( transmitir(client) )) 
+    #tasks.append( asyncio.create_task( actualizar_db() )) 
+
+    while True:
+        ### Medicion ###
+        print("Midiendo temperatura/humedad...")
+        try:
+            d.measure()
+            try:
+                datos.temperatura = d.temperature()
+            except OSError as e:
+                print("sin sensor temperatura")
+            try:
+                datos.humedad = d.humidity()
+            except OSError as e:
+                print("sin sensor humedad")
+        except OSError as e:
+            print("sin sensor")
+
+        ### Transmitir ###
+        mensaje = json.dumps({'temperatura': datos.temperatura,
+                            'humedad': datos.humedad,
+                            'periodo': datos.periodo,
+                            'modo_automatico': datos.modo_auto,
+                            'setpoint':datos.setpoint})
+
+        print('Enviando Datos')
+        await client.publish('iot2024/' + topic_base, mensaje, qos = 1)
+
+        ### Base de datos ###
+        print("Actualizando base de datos...")
+        f = open("mydb", "w+b")
+        db = btree.open(f)
+        db["modo"] = str(datos.modo_auto)
+        db["periodo"] = str(datos.periodo)
+        db["rele"] = str(datos.rele_estado)
+        db["setpoint"] = str(datos.setpoint)
+        db.close()
+        f.close()
+        await asyncio.sleep(5)
 
     try:
         res = await asyncio.gather(*tasks, return_exceptions=True)
@@ -232,12 +311,13 @@ async def main(client):
 ######################### END MAIN ###########################
 
 # Define configuration
-config['subs_cb'] = recepcion
-config['connect_coro'] = conn_han
-config['wifi_coro'] = wifi_han
+#config['subs_cb'] = recepcion
+#config['connect_coro'] = conn_han
+#config['wifi_coro'] = wifi_han
 config['ssl'] = True
 config['ssid'] = SSID
 config['wifi_pw'] = password
+config["queue_len"] = 1
 
 # Set up client
 MQTTClient.DEBUG = False  # Optional
@@ -249,13 +329,3 @@ try:
 finally:
     client.close()
     asyncio.new_event_loop()
-
-# Guardar y terminar
-f = open("mydb", "w+b")
-db = btree.open(f)
-db["modo"] = str(datos.modo_auto)
-db["periodo"] = str(datos.periodo)
-db["rele"] = str(datos.rele_estado)
-db["setpoint"] = str(datos.setpoint)
-db.close()
-f.close()
